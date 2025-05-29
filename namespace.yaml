@@ -1,0 +1,201 @@
+# ------------------------------------------------------------------------------
+# 1. Namespace creation with labels
+# ------------------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-namespace
+  labels:
+    environment: production   # Label to indicate environment type
+    team: devops              # Label to indicate team ownership
+
+# ------------------------------------------------------------------------------
+# 2. ResourceQuota to control resource consumption in the namespace
+#    - Prevents overuse of CPU, memory, and pod count
+# ------------------------------------------------------------------------------
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: prod-quota
+  namespace: prod-namespace
+spec:
+  hard:
+    pods: "20"                 # Maximum of 20 pods in this namespace
+    requests.cpu: "4"          # Up to 4 cores of CPU requested
+    requests.memory: 8Gi       # Up to 8Gi of memory requested
+    limits.cpu: "8"            # Up to 8 cores of CPU allowed
+    limits.memory: 16Gi        # Up to 16Gi of memory allowed
+
+# ------------------------------------------------------------------------------
+# 3. LimitRange to set default resource requests and limits for containers
+#    - Ensures containers have default CPU/memory settings
+# ------------------------------------------------------------------------------
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-limits
+  namespace: prod-namespace
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: 1                   # Default CPU limit for containers: 1 core
+      memory: 1Gi              # Default memory limit: 1Gi
+    defaultRequest:
+      cpu: 500m                # Default CPU request: 0.5 core
+      memory: 512Mi            # Default memory request: 512Mi
+
+# ------------------------------------------------------------------------------
+# 4. NetworkPolicy to block all traffic by default (default deny)
+#    - Essential for security in production environments
+# ------------------------------------------------------------------------------
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: prod-namespace
+spec:
+  podSelector: {}              # Applies to all pods in the namespace
+  policyTypes:
+  - Ingress
+  - Egress
+
+# ------------------------------------------------------------------------------
+# 5. NetworkPolicy to allow monitoring traffic (example)
+#    - Allows traffic only from a monitoring namespace
+# ------------------------------------------------------------------------------
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-monitoring
+  namespace: prod-namespace
+spec:
+  podSelector: {}
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          team: monitoring     # Allow only traffic from namespaces with team=monitoring
+
+# ------------------------------------------------------------------------------
+# 6. Pod Security Standards labels for enforcing restricted security level
+#    - Pod security standards ensure secure workload configurations
+#    - Enforced starting from Kubernetes 1.25+
+# ------------------------------------------------------------------------------
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod-namespace
+  labels:
+    pod-security.kubernetes.io/enforce: restricted   # Enforce restricted policy
+    pod-security.kubernetes.io/audit: restricted     # Audit restricted policy
+    pod-security.kubernetes.io/warn: restricted      # Warn for restricted policy
+
+# ------------------------------------------------------------------------------
+# 7. ServiceAccount for application pods
+#    - Assigns a dedicated identity for applications to follow the principle of least privilege
+# ------------------------------------------------------------------------------
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-sa
+  namespace: prod-namespace
+
+# ------------------------------------------------------------------------------
+# 8. Admin Role for full access within the namespace
+# ------------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: admin
+  namespace: prod-namespace
+rules:
+- apiGroups: ["*"]             # All API groups
+  resources: ["*"]             # All resources
+  verbs: ["*"]                 # All actions (get, list, create, delete, etc.)
+
+# ------------------------------------------------------------------------------
+# 9. RoleBinding to bind the admin Role to a specific user
+# ------------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: admin-binding
+  namespace: prod-namespace
+subjects:
+- kind: User
+  name: alice@example.com      # User who has admin access
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: admin
+  apiGroup: rbac.authorization.k8s.io
+
+# ------------------------------------------------------------------------------
+# 10. Read-only Role for QA or limited-access users
+# ------------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-reader
+  namespace: prod-namespace
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch"]  # Read-only actions
+
+# ------------------------------------------------------------------------------
+# 11. RoleBinding for QA team to have read-only access
+# ------------------------------------------------------------------------------
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: qa-binding
+  namespace: prod-namespace
+subjects:
+- kind: Group
+  name: qa-team               # Group of users with read-only access
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io
+
+# ------------------------------------------------------------------------------
+# 12. Example Pod demonstrating security best practices
+#    - Uses the ServiceAccount created above
+#    - SecurityContext to drop root privileges and read-only root filesystem
+# ------------------------------------------------------------------------------
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-app
+  namespace: prod-namespace
+spec:
+  serviceAccountName: app-sa
+  containers:
+  - name: app
+    image: nginx:1.25
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+    securityContext:
+      runAsUser: 1000                 # Non-root user
+      runAsGroup: 3000
+      fsGroup: 2000
+      readOnlyRootFilesystem: true    # Filesystem is read-only for better security
